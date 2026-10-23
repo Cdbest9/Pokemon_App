@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Pokémon">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1b1f3a">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>Pokémon Collection</title>
+<style>
+  :root { --bg:#12152b; --card:#1c2040; --card2:#242a52; --line:#2f3566; --txt:#eef0ff; --mut:#9aa0cf; --acc:#ffcb05; --ok:#3ddc97; --bad:#ff6b6b; --blue:#6f7dff; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; background:var(--bg); color:var(--txt); font:16px/1.45 -apple-system,system-ui,sans-serif; }
+  body { padding:env(safe-area-inset-top) env(safe-area-inset-right) calc(20px + env(safe-area-inset-bottom)) env(safe-area-inset-left); min-height:100vh; }
+  header { display:flex; align-items:center; gap:14px; padding:14px 22px; flex-wrap:wrap; position:sticky; top:0; z-index:5; background:#12152bee; backdrop-filter:blur(10px); border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:20px; }
+  nav { display:flex; gap:8px; margin-left:auto; }
+  nav button { border:1px solid var(--line); background:var(--card); color:var(--txt); border-radius:12px; padding:10px 16px; font:inherit; font-weight:600; }
+  nav button.on { background:var(--acc); color:#222; border-color:var(--acc); }
+  main { max-width:1100px; margin:0 auto; padding:18px 22px; }
+  .view { display:none; } .view.on { display:block; }
+  button.btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; border:0; border-radius:14px; padding:14px 20px; font:inherit; font-size:17px; font-weight:700; background:var(--acc); color:#222; }
+  button.btn.sec { background:var(--card2); color:var(--txt); border:1px solid var(--line); font-weight:600; font-size:15px; padding:11px 16px; }
+  button.btn.bad { background:transparent; color:var(--bad); border:1px solid var(--bad); font-size:15px; padding:10px 14px; }
+  button:disabled { opacity:.5; }
+  input[type=text], input[type=password], input[type=search], input[type=url], select { width:100%; padding:12px; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--txt); font:inherit; }
+  label.f { display:block; margin:12px 0 4px; color:var(--mut); font-size:13px; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:16px; }
+  .msg { padding:12px 14px; border-radius:12px; margin-bottom:14px; font-size:14px; }
+  .msg.warn { background:#ffcb0522; border:1px solid #ffcb0566; } .msg.err { background:#ff6b6b22; border:1px solid #ff6b6b66; } .msg.ok { background:#3ddc9722; border:1px solid #3ddc9766; }
+  .note { color:var(--mut); font-size:13px; }
+  /* scansione */
+  .scan-grid { display:grid; grid-template-columns:1fr; gap:16px; }
+  @media (min-width:900px) { .scan-grid { grid-template-columns:1.1fr 1fr; align-items:start; } }
+  .cam { position:relative; margin:0 auto; background:#000; border-radius:16px; overflow:hidden; width:100%; aspect-ratio:16/9; }
+  .cam video, .cam canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  .guide { position:absolute; border:3px dashed var(--acc); border-radius:14px; box-shadow:0 0 0 9999px #0006; pointer-events:none; }
+  .cam .hint { position:absolute; left:0; right:0; bottom:8px; text-align:center; font-size:13px; color:#fff; text-shadow:0 1px 3px #000; }
+  .camrow { display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; } .camrow .btn { flex:1; min-width:150px; }
+  .hero { display:flex; gap:16px; }
+  .hero img { width:130px; border-radius:8px; align-self:flex-start; background:#0003; } .hero .noimg { width:130px; height:182px; border-radius:8px; background:#0003; }
+  .name { font-size:22px; font-weight:800; } .coll { color:var(--acc); font-weight:600; }
+  .grid { display:grid; grid-template-columns:auto 1fr; gap:4px 14px; margin-top:10px; font-size:15px; } .grid span:nth-child(odd) { color:var(--mut); }
+  .price { font-size:34px; font-weight:800; margin-top:12px; } .price small { display:block; font-size:12px; font-weight:500; color:var(--mut); }
+  .flag { display:flex; align-items:center; gap:14px; margin-top:14px; padding:16px; border-radius:14px; background:#0003; font-size:18px; font-weight:600; }
+  .flag input { width:32px; height:32px; accent-color:var(--ok); }
+  .qty { margin-left:auto; display:flex; align-items:center; gap:12px; } .qty button { width:40px; height:40px; border-radius:50%; border:1px solid var(--line); background:var(--card2); color:var(--txt); font-size:22px; }
+  .cand { display:flex; gap:12px; align-items:center; padding:10px 0; border-top:1px solid var(--line); cursor:pointer; } .cand:first-of-type { border-top:0; }
+  .cand img { width:42px; border-radius:4px; } .cand .t { font-weight:600; } .cand .s { font-size:12px; color:var(--mut); }
+  .spin { text-align:center; padding:20px; color:var(--mut); }
+  /* raccolta */
+  .tot { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:12px; } .tot b { font-size:34px; color:var(--acc); }
+  .bar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px; } .bar input { flex:1; min-width:200px; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+  th, td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { background:var(--card2); font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--mut); cursor:pointer; user-select:none; }
+  tbody tr { cursor:pointer; } tbody tr:active { background:var(--card2); } tr:last-child td { border-bottom:0; }
+  td.num, th.num { text-align:right; } td img { width:36px; border-radius:3px; display:block; }
+  .up { color:var(--ok); } .down { color:var(--bad); } .empty { padding:40px; text-align:center; color:var(--mut); }
+  #tableWrap { overflow-x:auto; }
+  @media (max-width:760px) { .hide-s { display:none; } main { padding:12px; } }
+  progress { width:100%; height:12px; }
+  dialog { border:0; border-radius:18px; padding:0; width:min(760px, 94vw); background:var(--card); color:var(--txt); box-shadow:0 20px 60px #000a; }
+  dialog::backdrop { background:#000a; } .dlg { padding:22px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:3px 14px; margin:10px 0; font-size:15px; } .kv span:nth-child(odd) { color:var(--mut); }
+  svg text { font:11px system-ui; fill:#9aa0cf; }
+  .hist { max-height:150px; overflow:auto; font-size:13px; margin-top:8px; } .hist div { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--line); }
+  pre { white-space:pre-wrap; font-size:11px; color:var(--mut); } details summary { color:var(--mut); font-size:13px; margin-top:10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎴 Pokémon Collection</h1>
+  <nav>
+    <button data-tab="scan" class="on">📷 Scansiona</button>
+    <button data-tab="coll">🎴 Raccolta</button>
+    <button data-tab="set">⚙️ Impostazioni</button>
+  </nav>
+</header>
+<main>
+
+<!-- ============ SCANSIONA ============ -->
+<section id="v-scan" class="view on">
+  <div id="scanStatus"></div>
+  <div class="scan-grid">
+    <div>
+      <div class="cam" id="cam">
+        <video id="video" playsinline muted autoplay></video>
+        <div class="guide" id="guide"></div>
+        <div class="hint">Metti la carta dentro il riquadro, con il numero in basso leggibile</div>
+      </div>
+      <div class="camrow">
+        <button class="btn" id="shoot">📸 Scatta e riconosci</button>
+        <button class="btn sec" id="pickPhoto">🖼️ Usa una foto</button>
+        <input id="file" type="file" accept="image/*" capture="environment" hidden>
+      </div>
+      <div id="camMsg"></div>
+      <div class="panel" style="margin-top:16px">
+        <b>Non la trova? Cerca per nome</b>
+        <input type="search" id="q" placeholder="es. Pikachu" style="margin-top:8px">
+        <div id="searchOut"></div>
+      </div>
+    </div>
+    <div id="result"></div>
+  </div>
+</section>
+
+<!-- ============ RACCOLTA ============ -->
+<section id="v-coll" class="view">
+  <div class="tot"><b id="total">—</b><span class="note" id="totalInfo"></span></div>
+  <div id="collAlerts"></div>
+  <div class="bar">
+    <input type="search" id="filter" placeholder="Cerca per nome, collezione, tipo…">
+    <button class="btn" id="btnRefresh">🔄 Aggiorna valore collezione</button>
+  </div>
+  <div id="refreshBox" class="panel" style="display:none"></div>
+  <div id="tableWrap"></div>
+  <p class="note" id="collNote"></p>
+</section>
+
+<!-- ============ IMPOSTAZIONI ============ -->
+<section id="v-set" class="view">
+  <div id="setStatus"></div>
+  <div class="panel">
+    <h3 style="margin-top:0">Collegamento a CardTrader</h3>
+    <label class="f">Token API CardTrader (resta salvato solo su questo iPad)</label>
+    <input type="password" id="sToken" autocomplete="off" placeholder="incolla qui il token">
+    <label class="f">Indirizzo del proxy gratuito (lascia vuoto per provare il collegamento diretto)</label>
+    <input type="url" id="sProxy" placeholder="https://qualcosa.tuonome.workers.dev">
+    <label class="f">Condizione usata per il prezzo</label>
+    <select id="sCond"><option>Near Mint</option><option>Slightly Played</option><option>Moderately Played</option><option>Played</option><option>Heavily Played</option><option value="">Qualsiasi</option></select>
+    <label class="f">Lingua delle carte (codice a 2 lettere, es. it o en; vuoto = tutte)</label>
+    <input type="text" id="sLang" placeholder="vuoto = tutte" autocapitalize="none">
+    <label class="f">Valuta preferita</label>
+    <input type="text" id="sCur" placeholder="EUR" autocapitalize="characters">
+    <div class="camrow" style="margin-top:16px">
+      <button class="btn" id="sSave">Salva</button>
+      <button class="btn sec" id="sTest">Prova collegamento</button>
+    </div>
+    <div id="sTestOut" style="margin-top:12px"></div>
+  </div>
+  <div class="panel">
+    <h3 style="margin-top:0">Catalogo carte</h3>
+    <p class="note" id="catInfo"></p>
+    <button class="btn" id="btnCatalog">⬇️ Scarica / aggiorna catalogo</button>
+    <div id="catBox" style="margin-top:12px"></div>
+  </div>
+  <div class="panel">
+    <h3 style="margin-top:0">Backup dei tuoi dati</h3>
+    <p class="note">I dati stanno solo su questo iPad. Salva ogni tanto una copia (nell'app File o in iCloud Drive): se disinstalli l'app o cambi iPad, puoi ripristinarla da qui.</p>
+    <div class="camrow">
+      <button class="btn sec" id="bExport">💾 Salva backup</button>
+      <button class="btn sec" id="bCsv">📄 Esporta in Excel (CSV)</button>
+      <button class="btn sec" id="bImport">📂 Ripristina backup</button>
+      <input id="bFile" type="file" accept="application/json,.json" hidden>
+    </div>
+    <div id="bOut" style="margin-top:12px"></div>
+  </div>
+</section>
+</main>
+
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
+<script src="tesseract.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
