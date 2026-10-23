@@ -81,6 +81,18 @@ async function ctGet(path, params = {}) {
   throw new CTError("CardTrader: troppe richieste, riprova tra poco.", "rate");
 }
 
+
+// CardTrader a volte avvolge gli elenchi in un oggetto (es. {"array":[...]}): li rendiamo sempre array.
+function asList(x) {
+  if (Array.isArray(x)) return x;
+  if (x && typeof x === "object") {
+    if (Array.isArray(x.array)) return x.array;
+    const v = Object.values(x).find(Array.isArray);
+    if (v) return v;
+  }
+  throw new CTError("Risposta inattesa da CardTrader (formato non riconosciuto).", "format");
+}
+
 const first = (o, ...keys) => { for (const k of keys) if (o && o[k] != null && o[k] !== "") return o[k]; return null; };
 function normKey(num) {
   if (num == null) return null;
@@ -132,10 +144,10 @@ async function loadCache() {
 }
 
 async function syncCatalog(onProgress) {
-  const games = await ctGet("/games");
+  const games = asList(await ctGet("/games"));
   const g = games.find(x => /pok/i.test(x.name || "") || /pok/i.test(x.display_name || ""));
   if (!g) throw new CTError("Gioco Pokémon non trovato su CardTrader.", "nogame");
-  const exps = (await ctGet("/expansions")).filter(e => e.game_id === g.id);
+  const exps = asList(await ctGet("/expansions")).filter(e => e.game_id === g.id);
   await DB.putMany("expansions", exps.map(e => ({ id: e.id, game_id: e.game_id, code: e.code, name: e.name })));
   let done = new Set((await DB.meta("sync_done", [])) || []);
   if (await DB.meta("sync_complete", true)) { done = new Set(); await DB.setMeta("sync_complete", false); }   // nuovo giro
@@ -144,7 +156,7 @@ async function syncCatalog(onProgress) {
     i++;
     onProgress && onProgress(i, exps.length, e.name);
     if (done.has(e.id)) continue;
-    const bps = await ctGet("/blueprints/export", { expansion_id: e.id });
+    const bps = asList(await ctGet("/blueprints/export", { expansion_id: e.id }));
     const old = new Map((await DB.byIndex("cards", "expansion_id", e.id)).map(c => [c.blueprint_id, c]));
     const rows = bps.map(bp => {
       bp.expansion_id = bp.expansion_id ?? e.id;
