@@ -215,22 +215,27 @@ function lev(a, b) {
 const sim = (a, b) => (!a || !b) ? 0 : 1 - lev(a, b) / Math.max(a.length, b.length);
 const LANG_CODES = new Set(["EN", "IT", "DE", "FR", "ES", "PT", "JP", "KO", "ZH", "NL", "PL", "RU"]);
 
-// Numero stampato in basso a sinistra, di solito tipo "050/148". Ritorna {key, num, total, raw} o null.
+// Numero stampato in basso a sinistra. Formati gestiti: 01/152, TG01/TG30, GG13/GG70, SWSH300, SM150 (e altre promo: SVP, XY, BW…).
+// Ritorna {key, num, total, raw} o null. "total" è il totale numerico (es. 152); per TG/GG/promo è null.
 function parseNumber(text) {
   const t = String(text || "").toUpperCase();
   const ok = (n, tot) => n >= 1 && n <= 500 && tot >= 5 && tot <= 500;
-  let m = t.match(/(?<!\d)(\d{1,3})\s*[\/\\|]\s*(\d{2,3})(?!\d)/);          // anche se attaccato alle lettere ("SVIEN025/198")
+  let m = t.match(/([A-Z0-9]{2,12})\s*[\/\\|]\s*([A-Z]{1,3})(\d{1,3})(?!\d)/);              // TG01/TG30, GG13/GG70 (anche "LORENTGO5/TG30")
+  if (m) {
+    const pre = m[2], idx = m[1].lastIndexOf(pre);
+    const digits = idx >= 0 ? m[1].slice(idx + pre.length).replace(/[OQ]/g, "0").replace(/[IL]/g, "1") : "";
+    if (/^\d{1,3}$/.test(digits)) return { key: normKey(pre + digits), num: pre + digits, total: null, subset: pre + m[3], raw: m[0] };
+  }
+  m = t.match(/(?<!\d)(\d{1,3})\s*[\/\\|]\s*(\d{2,3})(?!\d)/);                                  // 01/152, anche se attaccato alle lettere ("SVIEN025/198")
   if (m && ok(+m[1], +m[2])) return { key: normKey(m[1]), num: m[1], total: +m[2], raw: m[0] };
-  m = t.match(/(?<![A-Z0-9])([A-Z]{1,3}\d{1,3})\s*[\/\\|]\s*([A-Z]{1,3}\d{1,3})(?!\d)/);          // TG05/TG30, GG05/GG70
-  if (m) return { key: normKey(m[1]), num: m[1], total: null, raw: m[0] };
-  for (const tok of t.split(/\s+/)) {                                                // O/0, I/1 confusi dall'OCR
+  for (const tok of t.split(/\s+/)) {                                                            // O/0, I/1 confusi dall'OCR
     if (!/^[\dOQIL\/\\|]{5,9}$/.test(tok) || !/\d/.test(tok)) continue;
     const f = tok.replace(/[OQ]/g, "0").replace(/[IL]/g, "1").replace(/[\\|]/g, "/");
     const mm = f.match(/^(\d{1,3})\/(\d{2,3})$/);
     if (mm && ok(+mm[1], +mm[2])) return { key: normKey(mm[1]), num: mm[1], total: +mm[2], raw: tok };
   }
-  m = t.match(/\b(SVP|SVE|SWSH|SM|XY|BW|HGSS|DP|SMP)\s*0*(\d{1,3})\b/);               // promo
-  if (m) return { key: normKey(m[1] + m[2]), num: m[1] + m[2], total: null, raw: m[0] };
+  m = t.match(/(SWSH|SVP|SVE|SMP|HGSS|XY|SM|BW|DP)\s*[-]?\s*0*(\d{1,3})(?!\d)/);   // promo: SWSH300, SM150
+  if (m) return { key: normKey(m[1] + m[2]), num: m[1] + m[2], total: null, promo: true, raw: m[0] };
   return null;
 }
 // Codice del set stampato accanto al simbolo (es. SVI, PAL, MEW): serve come indizio in più.
@@ -243,14 +248,17 @@ function setCodes(text) {
   }
   return new Set(toks.map(normCode));
 }
-// Nomi candidati letti nella zona in alto a sinistra (tolgo "Basic", "Fase 1", PS…)
+// Nome letto in alto a sinistra: tolgo l'etichetta di evoluzione (Base / Fase 1 / Fase 2 / Basic / Stage 1…), "Si evolve da…", PS e numeri.
+const STAGE_RX = /\b(?:stage|fase|stadio)\s*[12lI|]?(?![a-z])|\b(?:basic|base|baby|restored)\b/gi;
 function nameCandidates(texts) {
   const out = new Set();
   for (const txt of texts) for (const raw of String(txt || "").split(/[\r\n]+/)) {
-    let l = raw.replace(/[|_]/g, " ");
-    l = l.replace(/\b(basic|stage\s*[12]|restored|baby|fase\s*[12]|base|pokémon|pokemon)\b/gi, " ");
-    l = l.replace(/\b(hp|ps)\s*\d+\b/gi, " ").replace(/\b\d+\s*(hp|ps)\b/gi, " ").replace(/\b\d+\b/g, " ");
-    const cn = cleanName(l);
+    if (/evol/i.test(raw)) continue;                                  // riga "Si evolve da X": non è il nome della carta
+    let l = raw.replace(/[|_]/g, " ").replace(STAGE_RX, " ");
+    l = l.replace(/\b(?:hp|ps)\s*\d+\b/gi, " ").replace(/\b\d+\s*(?:hp|ps)\b/gi, " ").replace(/\b\d+\b/g, " ").replace(/\bpok[eé]mon\b/gi, " ");
+    let toks = cleanName(l).split(" ").filter(Boolean);
+    while (toks.length > 1 && toks[0].length < 2) toks.shift();          // rumore del riquadro dell'etichetta
+    const cn = toks.join(" ");
     if (cn.length >= 3 && cn.length <= 30) out.add(cn);
   }
   return [...out];
@@ -277,7 +285,8 @@ function totalCompat(expId, total) {
   const r = Math.max(...nums) / total;
   return r <= 1.5 ? 0.7 : r <= 2 ? 0.4 : 0.2;
 }
-const codeMatch = (expId, codes) => { const e = Cache.exps.get(expId) || {}; return [e.code, e.ptcgo_code].some(c => c && codes.has(normCode(c))) ? 1 : 0; };
+const codeBlob = txt => normCode(txt).replace(/[^A-Z0-9]/g, "");
+const codeMatch = (expId, blob) => { const e = Cache.exps.get(expId) || {}; return [e.code, e.ptcgo_code].some(c => c && c.length >= 3 && blob.includes(normCode(c))) ? 1 : 0; };
 
 // Riconoscimento dopo la scansione: nome (alto sx) + numero/totale (basso sx) + codice set.
 async function identify(input, limit = 5) {
@@ -287,16 +296,20 @@ async function identify(input, limit = 5) {
   const strong = nameCandidates([nameText]);
   const cands = strong.length ? strong : nameCandidates([fullText]);
   const nameFactor = strong.length ? 1 : 0.8;
-  const codes = setCodes(inp.codeText || numText || fullText);
+  const codes = codeBlob(inp.codeText || numText || fullText);
   const hasTotal = !!(parsed && parsed.total);
   const W = hasTotal ? { name: 0.5, num: 0.2, tot: 0.2, code: 0.1 } : { name: 0.65, num: 0.25, tot: 0, code: 0.1 };
 
   const scored = [];
-  const pool = parsed && Cache.byKey.get(parsed.key);
+  let pool = parsed && Cache.byKey.get(parsed.key), weak = false;
+  if ((!pool || !pool.length) && parsed) {                         // promo / TG / GG: se CardTrader numera solo con le cifre provo con quelle
+    const dm = /^[A-Z]+0*(\d+)$/.exec(parsed.key); if (dm) { pool = Cache.byKey.get(dm[1]); weak = !!pool; }
+  }
   if (pool && pool.length) {
     for (const c of pool) {
       const ns = (cands.length ? nameScore(c.cn, cands) : 0) * nameFactor;
-      scored.push([W.name * ns + W.num + W.tot * totalCompat(c.exp, parsed.total) + W.code * codeMatch(c.exp, codes), c]);
+      if (weak && ns < 0.6) continue;                              // numero incerto: il nome deve combaciare
+      scored.push([W.name * ns + (weak ? 0.6 : 1) * W.num + W.tot * totalCompat(c.exp, parsed.total) + W.code * codeMatch(c.exp, codes), c]);
     }
   } else if (cands.length) {                       // numero non letto: solo nome, confidenza bassa (niente flag automatico)
     for (const [cn, cs] of Cache.byName) {
@@ -333,7 +346,8 @@ async function searchCards(nameQ, numQ, limit = 30) {
   const compat = c => p && p.total ? totalCompat(c.exp, p.total) : 0;
   let hits = [];
   if (p) {
-    const base = Cache.byKey.get(p.key) || [];
+    let base = Cache.byKey.get(p.key) || [];
+    if (!base.length) { const dm = /^[A-Z]+0*(\d+)$/.exec(p.key); if (dm) base = Cache.byKey.get(dm[1]) || []; }
     hits = base.map(c => [nameMatch(c.cn), c]).filter(([ns]) => ns > 0);
     if (!hits.length && tokens.length) hits = base.map(c => [sim(c.cn, full) >= 0.65 ? sim(c.cn, full) * 0.7 : 0, c]).filter(([ns]) => ns > 0);
     hits = hits.map(([ns, c]) => [ns + 1 + 0.5 * compat(c), c]);
@@ -397,27 +411,75 @@ async function setOwned(id, owned, quantity) {
   return cardFull(id);
 }
 
+/* ---------------------------------------- aggiornamento manuale del valore */
+const fmtMoney = (c, cur) => eur(Math.abs(c), cur);
+const signOf = d => d > 0 ? "+" : d < 0 ? "−" : "";
+// Differenza tra due prezzi: verde se sale, rosso se scende. d = {prev, now, cur}
+function deltaHtml(d, opt = {}) {
+  if (!d || d.prev == null || d.now == null) return "";
+  const diff = d.now - d.prev, cls = diff > 0 ? "up" : diff < 0 ? "down" : "flat", arrow = diff > 0 ? "▲" : diff < 0 ? "▼" : "•";
+  const pct = d.prev ? Math.abs(diff / d.prev * 100) : null;
+  return `<span class="delta ${cls}${opt.big ? " big" : ""}" title="${diff === 0 ? "invariato" : (diff > 0 ? "salito" : "sceso")}"><i>${arrow}</i>${diff === 0 ? "invariato" : signOf(diff) + fmtMoney(diff, d.cur)}${opt.pct !== false && pct != null && diff !== 0 ? ` <small>${signOf(diff)}${pct.toFixed(1)}%</small>` : ""}</span>`;
+}
+
 let refreshing = false, cancelRefresh = false;
 async function refreshAll() {
   if (refreshing) return;
   const col = await DB.getAll("collection");
-  if (!col.length) return alert("La raccolta è vuota.");
+  if (!col.length) { $("#refreshBox").hidden = false; $("#refreshBox").innerHTML = '<div class="msg warn">La raccolta è vuota: scansiona prima qualche carta.</div>'; return; }
   refreshing = true; cancelRefresh = false;
-  const box = $("#refreshBox"); box.style.display = "";
-  $("#btnRefresh").disabled = true;
-  let errors = 0, lastErr = "";
+  const box = $("#refreshBox"); box.hidden = false;
+  $("#btnRefresh").disabled = true; $("#btnRefresh").classList.add("busy");
+  const before = {}, qty = {}, cur = {}; let prevTotal = 0;
+  for (const c of col) { const card = await DB.get("cards", c.blueprint_id); before[c.blueprint_id] = card ? card.last_price_cents : null; qty[c.blueprint_id] = c.quantity; cur[c.blueprint_id] = card ? card.last_price_currency : null; prevTotal += ((card && card.last_price_cents) || 0) * c.quantity; }
+  const after = { ...before }; let errors = 0, lastErr = "", updated = 0, noOffer = 0;
   for (let i = 0; i < col.length; i++) {
     if (cancelRefresh) break;
-    box.innerHTML = `<b>Aggiorno i prezzi… ${i + 1}/${col.length}</b><progress max="${col.length}" value="${i}"></progress><button class="btn sec" id="cancelRef" style="margin-top:10px">Interrompi</button>`;
+    box.innerHTML = `<div class="rprog"><b>Aggiorno i prezzi… ${i + 1}/${col.length}</b><progress max="${col.length}" value="${i}"></progress><button class="btn sec" id="cancelRef">Interrompi</button></div>`;
     $("#cancelRef").onclick = () => { cancelRefresh = true; };
-    try { await recordPrice(col[i].blueprint_id, true); } catch (e) { errors++; lastErr = e.message; if (e.code === "auth" || e.code === "network" || e.code === "token") break; }
+    const id = col[i].blueprint_id;
+    try { const p = await recordPrice(id, true); if (p.cents != null) { after[id] = p.cents; cur[id] = p.currency; updated++; } else noOffer++; }
+    catch (e) { errors++; lastErr = e.message; if (e.code === "auth" || e.code === "network" || e.code === "token") break; }
     if (i < col.length - 1) await sleep(MARKET_DELAY);
   }
-  if (!errors) await DB.setMeta("prices_updated_at", new Date().toISOString());
-  refreshing = false; $("#btnRefresh").disabled = false;
-  box.innerHTML = errors ? `<div class="msg err" style="margin:0">Aggiornamento non completato: ${esc(lastErr)}</div>` : cancelRefresh ? "Interrotto." : '<div class="msg ok" style="margin:0">Valori aggiornati.</div>';
-  setTimeout(() => { if (!refreshing) box.style.display = "none"; }, errors ? 12000 : 3000);
-  renderCollection();
+  refreshing = false; $("#btnRefresh").disabled = false; $("#btnRefresh").classList.remove("busy");
+  const cards = {}; let newTotal = 0;
+  for (const c of col) { const id = c.blueprint_id; newTotal += (after[id] || 0) * c.quantity; if (updated && before[id] != null && after[id] != null) cards[id] = [before[id], after[id]]; }
+  if (updated) {
+    const at = new Date().toISOString();
+    await DB.setMeta("last_refresh", { at, prevTotal, newTotal, cards });
+    const series = (await DB.meta("totals", [])) || [];
+    if (!series.length) {                                           // punto di partenza: quando hai aggiunto la prima carta (mai alla stessa ora del secondo)
+      const firstAdded = col.reduce((m, c) => (!m || c.added_at < m ? c.added_at : m), null);
+      let t0 = (await DB.meta("prices_updated_at")) || firstAdded || at;
+      if (!(t0 < at)) t0 = new Date(+new Date(at) - 60000).toISOString();
+      series.push({ at: t0, cents: prevTotal });
+    }
+    series.push({ at, cents: newTotal }); await DB.setMeta("totals", series.slice(-200));
+    if (!errors && !cancelRefresh) await DB.setMeta("prices_updated_at", at);
+  }
+  await renderCollection();
+  box.innerHTML = refreshSummary({ prevTotal, newTotal, cards }, { errors, lastErr, cancelled: cancelRefresh, noOffer, updated });
+  const x = $("#closeSum"); if (x) x.onclick = () => { box.hidden = true; box.innerHTML = ""; };
+  $$("#refreshBox [data-open]").forEach(el => el.onclick = () => openCard(+el.dataset.open));
+}
+
+function refreshSummary(r, st) {
+  const ids = Object.keys(r.cards);
+  const list = ids.map(id => ({ id: +id, prev: r.cards[id][0], now: r.cards[id][1], diff: r.cards[id][1] - r.cards[id][0] }));
+  const up = list.filter(x => x.diff > 0), down = list.filter(x => x.diff < 0), flat = list.length - up.length - down.length;
+  const diffTot = r.newTotal - r.prevTotal, cls = diffTot > 0 ? "up" : diffTot < 0 ? "down" : "flat";
+  const cur = Settings.get().currency;
+  const nameOf = id => { const f = rows.find(x => x.blueprint_id === id); return f ? f : { name: "Carta " + id, expansion_name: "" }; };
+  const row = x => { const f = nameOf(x.id); return `<button class="mover" data-open="${x.id}"><span><b>${esc(f.name)}</b><small>${esc(f.expansion_name)} · #${esc(f.collector_number)}</small></span>${deltaHtml({ prev: x.prev, now: x.now, cur })}</button>`; };
+  const top = (arr, dir) => arr.sort((a, b) => dir * (b.diff - a.diff)).slice(0, 5).map(row).join("") || '<div class="note">Nessuna</div>';
+  const warn = st.errors ? `<div class="msg err">Aggiornamento non completato: ${esc(st.lastErr)}${st.updated ? ` Le prime ${st.updated} carte sono state aggiornate.` : ""}</div>` : st.cancelled ? '<div class="msg warn">Aggiornamento interrotto: sono state aggiornate solo alcune carte.</div>' : "";
+  if (!ids.length) return warn + `<div class="rsum"><div class="rt"><b>${st.errors || st.cancelled ? "Nessun prezzo aggiornato" : "Prezzi aggiornati"}</b><button class="btn sec" id="closeSum">Chiudi</button></div>${st.noOffer ? `<div class="note">${st.noOffer} carte senza offerte in vendita: tengo l'ultimo prezzo noto.</div>` : ""}</div>`;
+  return warn + `<div class="rsum">
+    <div class="rt"><b>Valori aggiornati</b><button class="btn sec" id="closeSum">Chiudi</button></div>
+    <div class="rtot ${cls}"><span class="rl">Valore della raccolta</span><span class="rv">${eur(r.newTotal, cur)}</span>${deltaHtml({ prev: r.prevTotal, now: r.newTotal, cur }, { big: true })}</div>
+    <div class="rcounts"><span class="up">▲ ${up.length} salite</span><span class="down">▼ ${down.length} scese</span><span class="flat">• ${flat} invariate</span>${st.noOffer ? `<span class="note">${st.noOffer} senza offerte</span>` : ""}</div>
+    <div class="movers"><div><h4>Salite maggiori</h4>${top(up, 1)}</div><div><h4>Cali maggiori</h4>${top(down, -1)}</div></div></div>`;
 }
 
 /* ------------------------------------------------------------------ viste */
@@ -444,7 +506,7 @@ async function startCamera() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 2560 }, height: { ideal: 1440 } }, audio: false });
     const v = $("#video"); v.srcObject = stream; await v.play();
-    $("#camMsg").innerHTML = "";
+    $("#camMsg").innerHTML = ""; $("#cam").classList.remove("off");
     const fit = () => layoutGuide();
     v.onloadedmetadata = fit; fit(); window.addEventListener("resize", fit);
   } catch (e) {
@@ -452,7 +514,7 @@ async function startCamera() {
     $("#camMsg").innerHTML = '<div class="msg warn">Non riesco ad aprire la fotocamera (hai dato il permesso a Safari?). Puoi comunque usare «Usa una foto».</div>';
   }
 }
-function stopCamera() { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; $("#video").srcObject = null; } }
+function stopCamera() { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; $("#video").srcObject = null; } $("#cam").classList.add("off"); }
 document.addEventListener("visibilitychange", () => { if (document.hidden) stopCamera(); else if ($("#v-scan").classList.contains("on")) startCamera(); });
 
 const CARD_RATIO = 63 / 88;   // larghezza/altezza di una carta
@@ -470,11 +532,13 @@ function layoutGuide() {
 }
 
 /* ------------------------------------------------------------- OCR per zone */
-// Zone della carta (frazioni di larghezza/altezza): nome in alto a sinistra, numero e simbolo in basso a sinistra.
+// Si leggono SOLO gli angoli della carta (mai la carta intera). Frazioni di larghezza/altezza della carta:
+//  - nome: in alto a sinistra, dopo l'etichetta Base / Fase 1 / Fase 2
+//  - simbolo del set + numero: in basso a sinistra (es. 01/152, TG01/TG30, SWSH300, SM150, GG13/GG70)
 const REG = {
   name: { x0: 0.03, x1: 0.74, y0: 0.02, y1: 0.13 },
   numLeft: { x0: 0.02, x1: 0.52, y0: 0.905, y1: 0.995 },
-  numStrip: { x0: 0.0, x1: 1.0, y0: 0.9, y1: 1.0 },
+  numStrip: { x0: 0.0, x1: 1.0, y0: 0.9, y1: 1.0 },       // solo se il numero non è a sinistra: tutta la fascia in basso
 };
 const NUM_WL = "0123456789/ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -523,51 +587,50 @@ async function ocrWith(canvas, psm, whitelist) {
   return data.text || "";
 }
 
-// Legge nome (alto sx) e numero/codice (basso sx) e li restituisce già pronti per il riconoscimento.
+// Legge nome (alto sx) e numero/codice del set (basso sx) e li restituisce già pronti per il riconoscimento.
 async function scanImage(src, W, H, cropToGuide, onStep = () => { }) {
   const g = cropToGuide ? guideRect(W, H) : { x: 0, y: 0, w: W, h: H };
   const dbg = {};
   onStep("Leggo il nome…");
   const nameTexts = [];
-  for (const [v, psm] of [["gray", "7"], ["bin", "7"], ["gray", "6"]]) {
-    const c = prep(src, g, REG.name, 1400, v); if (!dbg.nameCanvas) dbg.nameCanvas = c;
+  const nameRuns = [["gray", "7", 1400], ["bin", "7", 1400], ["gray", "6", 1400]];
+  for (let i = 0; i < nameRuns.length; i++) {
+    const [v, psm, tw] = nameRuns[i];
+    const c = prep(src, g, REG.name, tw, v); if (!dbg.nameCanvas) dbg.nameCanvas = c;
     nameTexts.push(await ocrWith(c, psm));
+    if (i === 2 && !nameCandidates(nameTexts).length)                       // nome non letto: ultimo tentativo più ingrandito, polarità opposta
+      nameTexts.push(await ocrWith(prep(src, g, REG.name, 2000, "binInv"), "7"));
   }
-  onStep("Leggo numero e simbolo…");
+  onStep("Leggo simbolo e numero…");
   const numTexts = [], votes = new Map();
-  for (const [reg, psm] of [[REG.numLeft, "7"], [REG.numStrip, "11"]]) {      // prima in basso a sinistra, poi tutta la fascia
+  const numRuns = [[REG.numLeft, "7", 1000], [REG.numLeft, "6", 1600], [REG.numStrip, "11", 1000]];
+  for (const [reg, psm, tw] of numRuns) {
     for (const v of ["bin", "gray", "binInv"]) {
-      const c = prep(src, g, reg, 1000, v);
+      const c = prep(src, g, reg, tw, v);
       const t = await ocrWith(c, psm, NUM_WL); numTexts.push(t);
       const p = parseNumber(t);
-      if (p) { const k = p.key + "/" + (p.total || ""); const e = votes.get(k) || { p, n: 0, canvas: c }; e.n++; votes.set(k, e); if (!dbg.numCanvas) dbg.numCanvas = c; }
+      if (p) { const k = p.key + "/" + (p.total || p.subset || ""); const e = votes.get(k) || { p, n: 0 }; e.n++; votes.set(k, e); if (!dbg.numCanvas) dbg.numCanvas = c; }
     }
     if (votes.size) break;
   }
-  let parsed = null;
-  if (votes.size) parsed = [...votes.values()].sort((a, b) => b.n - a.n)[0].p;            // vince la lettura più ripetuta
-  if (!dbg.numCanvas) dbg.numCanvas = prep(src, g, REG.numLeft, 1600, "bin");
-  let fullText = nameTexts.join("\n") + "\n" + numTexts.join("\n");
-  if (!parsed || !nameCandidates(nameTexts).length) {                                       // ultima spiaggia: tutta la carta
-    onStep("Leggo tutta la carta…");
-    fullText += "\n" + await ocrWith(prep(src, g, { x0: 0, x1: 1, y0: 0, y1: 1 }, 1200, "gray"), "3");
-  }
-  return { nameText: nameTexts.join("\n"), numText: numTexts.join("\n"), codeText: numTexts.join("\n"), fullText, parsed, dbg };
+  const parsed = votes.size ? [...votes.values()].sort((a, b) => b.n - a.n)[0].p : null;     // vince la lettura più ripetuta
+  if (!dbg.numCanvas) dbg.numCanvas = prep(src, g, REG.numLeft, 1000, "bin");
+  return { nameText: nameTexts.join("\n"), numText: numTexts.join("\n"), codeText: numTexts.join("\n"), fullText: "", parsed, dbg };
 }
 
 let lastScan = null;
 async function scanAndShow(src, w, h, cropToGuide) {
-  $("#result").innerHTML = '<div class="panel spin" id="scanStep">⏳ Leggo la carta… (la prima volta ci vuole qualche secondo)</div>';
+  $("#result").innerHTML = '<div class="panel spin" id="scanStep"><div class="loader"></div><span>Leggo gli angoli della carta…</span></div>';
   try {
-    const sc = await scanImage(src, w, h, cropToGuide, s => { const el = $("#scanStep"); if (el) el.textContent = "⏳ " + s; });
+    const sc = await scanImage(src, w, h, cropToGuide, s => { const el = $("#scanStep span"); if (el) el.textContent = s; });
     const cands = await identify(sc);
     lastCandidates = cands;
     const p = cands.parsed;
-    lastScan = { name: cands.nameRead, number: p ? (p.total ? `${p.num}/${p.total}` : p.num) : "", codes: [...setCodes(sc.codeText)].slice(0, 3).join(" "),
-      nameImg: sc.dbg.nameCanvas.toDataURL("image/png"), numImg: sc.dbg.numCanvas.toDataURL("image/png"), text: sc.fullText };
+    lastScan = { name: cands.nameRead, number: p ? (p.total ? `${p.num}/${p.total}` : p.subset ? `${p.num}/${p.subset}` : p.num) : "", codes: [...setCodes(sc.codeText)].slice(0, 3).join(" "),
+      nameImg: sc.dbg.nameCanvas.toDataURL("image/png"), numImg: sc.dbg.numCanvas.toDataURL("image/png") };
     $("#qName").value = lastScan.name ? lastScan.name.replace(/^./, ch => ch.toUpperCase()) : ""; $("#qNum").value = lastScan.number;   // precompilo la ricerca: puoi correggere a mano
     if (!cands.length) {
-      $("#result").innerHTML = '<div class="msg warn">Carta non riconosciuta. Controlla qui sotto cosa ho letto: correggi nome o numero nei campi di ricerca, oppure riprova con più luce e la carta dritta nel riquadro.</div>' + scanInfoHtml();
+      $("#result").innerHTML = '<div class="msg warn">Carta non riconosciuta. Guarda qui sotto cosa ho letto: correggi nome o numero nei campi «Cerca / correggi a mano», oppure riprova con più luce e la carta dritta nel riquadro.</div>' + scanInfoHtml();
       return;
     }
     autoAddedId = null;
@@ -576,11 +639,10 @@ async function scanAndShow(src, w, h, cropToGuide) {
 }
 function scanInfoHtml() {
   const s = lastScan; if (!s) return "";
-  return `<details class="panel" open><summary style="margin:0;color:var(--txt);font-weight:600">Cosa ho letto sulla carta</summary>
-    <div class="grid"><span>Nome</span><span>${esc(s.name || "non letto")}</span><span>Numero</span><span>${esc(s.number || "non letto")}</span><span>Codice set</span><span>${esc(s.codes || "—")}</span></div>
-    <div class="note" style="margin-top:10px">Zone analizzate (nome in alto a sinistra, numero in basso a sinistra):</div>
-    <img src="${s.nameImg}" style="max-width:100%;background:#fff;border-radius:6px;margin-top:6px"><img src="${s.numImg}" style="max-width:100%;background:#fff;border-radius:6px;margin-top:6px">
-    <div class="note" style="margin-top:8px">Se è sbagliato, correggi nome/numero nei campi «Cerca / correggi a mano».</div></details>`;
+  return `<details class="panel read" open><summary>Cosa ho letto negli angoli</summary>
+    <div class="kv"><span>Nome</span><span>${esc(s.name || "non letto")}</span><span>Numero</span><span>${esc(s.number || "non letto")}</span><span>Codice set</span><span>${esc(s.codes || "—")}</span></div>
+    <div class="crops"><figure><img src="${s.nameImg}" alt=""><figcaption>Nome (in alto a sinistra)</figcaption></figure><figure><img src="${s.numImg}" alt=""><figcaption>Simbolo e numero (in basso a sinistra)</figcaption></figure></div>
+    <div class="note">Se è sbagliato, correggi nome o numero nei campi «Cerca / correggi a mano».</div></details>`;
 }
 
 $("#shoot").onclick = async () => {
@@ -594,7 +656,8 @@ $("#pickPhoto").onclick = () => $("#file").click();
 $("#file").onchange = async e => {
   const f = e.target.files[0]; e.target.value = ""; if (!f) return;
   const bmp = await createImageBitmap(f);
-  await scanAndShow(bmp, bmp.width, bmp.height, false);
+  const ratio = bmp.width / bmp.height, cardOnly = ratio > 0.6 && ratio < 0.85;     // foto verticale = solo carta; orizzontale = uso il riquadro centrale come dalla fotocamera
+  await scanAndShow(bmp, bmp.width, bmp.height, !cardOnly);
 };
 
 /* ---- risultato di scansione */
@@ -629,17 +692,19 @@ function renderResult() {
   const owned = c.owned_qty != null, others = lastCandidates.filter(x => x.blueprint_id !== c.blueprint_id);
   const low = c.confidence != null && c.confidence < AUTO_ADD;
   $("#result").innerHTML = `
-    <div class="panel">
-      <div class="hero">${c.image_url ? `<img src="${esc(c.image_url)}" alt="">` : '<div class="noimg"></div>'}
-        <div><div class="name">${esc(c.name)}</div><div class="coll">${esc(c.expansion_name)}</div>
-          <div class="grid"><span>Numero</span><span>${esc(c.collector_number)}</span><span>Tipo</span><span>${esc(c.card_type)}</span>
-            <span>PS</span><span>${c.hp ?? "—"}</span><span>Rarità</span><span>${esc(c.rarity)}</span></div></div></div>
-      <div class="price">${eur(c.last_price_cents, c.last_price_currency)}<small>prezzo minimo in vendita su CardTrader${c.last_price_at ? " · " + esc(when(c.last_price_at)) : ""}</small></div>
-      <label class="flag"><input type="checkbox" id="own" ${owned ? "checked" : ""}><span>Ce l'ho nella mia raccolta</span>
-        ${owned ? `<span class="qty"><button id="qm">−</button><b>${c.owned_qty}</b><button id="qp">+</button></span>` : ""}</label>
+    <div class="panel result" style="--t:${typeColor(c.card_type)}">
+      <div class="hero">
+        <div class="rart">${artHtml(c)}<div class="foil"></div></div>
+        <div class="rinfo"><div class="name">${esc(c.name)}</div><div class="coll">${esc(c.expansion_name)}</div>
+          <div class="badges"><span class="b t">${esc(c.card_type || "Tipo n/d")}</span><span class="b">PS ${c.hp ?? "—"}</span><span class="b">${esc(c.rarity || "Rarità n/d")}</span><span class="b">#${esc(c.collector_number)}</span></div>
+          <div class="price">${eur(c.last_price_cents, c.last_price_currency)}<small>prezzo minimo in vendita su CardTrader${c.last_price_at ? " · " + esc(when(c.last_price_at)) : ""}</small></div>
+        </div>
+      </div>
+      <label class="flag"><input type="checkbox" id="own" ${owned ? "checked" : ""}><span class="box" aria-hidden="true"></span><span class="ft">Ce l'ho nella mia raccolta</span>
+        ${owned ? `<span class="qty"><button id="qm" aria-label="Una in meno">−</button><b>${c.owned_qty}</b><button id="qp" aria-label="Una in più">+</button></span>` : ""}</label>
       ${low ? '<div class="msg warn" style="margin:12px 0 0">Non sono sicuro che sia questa: controlla e barra tu il flag, oppure scegli un’altra carta.</div>' : ""}
     </div>
-    ${others.length ? `<div class="panel"><b>Forse era un’altra?</b>${others.map(candHtml).join("")}</div>` : ""}${scanInfoHtml()}`;
+    ${others.length ? `<div class="panel"><div class="ptitle">Forse era un’altra?</div>${others.map(candHtml).join("")}</div>` : ""}${scanInfoHtml()}`;
   $("#own").onchange = async e => { const k = c.confidence; current = await setOwned(c.blueprint_id, e.target.checked); current.confidence = k; if (!e.target.checked) autoAddedId = null; renderResult(); };
   if (owned) {
     const setQ = async n => { const k = c.confidence; current = n < 1 ? await setOwned(c.blueprint_id, false) : await setOwned(c.blueprint_id, true, n); current.confidence = k; renderResult(); };
@@ -659,67 +724,158 @@ async function doSearch() {
 }
 
 /* ------------------------------------------------------------- raccolta */
-let rows = [], sortKey = "added_at", sortDir = -1;
-const COLS = [["image_url", "", false, false], ["name", "Nome", false, false], ["expansion_name", "Collezione", false, true], ["collector_number", "N°", false, false],
-  ["card_type", "Tipo", false, true], ["hp", "PS", true, true], ["owned_qty", "Q.tà", true, false], ["last_price_cents", "Valore", true, false], ["delta", "Var.", true, false], ["added_at", "Aggiunta", false, true]];
+const TYPE_COL = [[/fuoc|fire/i, "#ff6b3d"], [/acqu|water/i, "#3da5ff"], [/erba|grass/i, "#4cd964"], [/lamp|electr|lightn/i, "#ffd60a"], [/psic|psych/i, "#c06bff"], [/lott|fight/i, "#c7773a"],
+  [/oscur|dark/i, "#7b7fb5"], [/metall|steel/i, "#9fb3c8"], [/drag/i, "#d9a441"], [/foll|fairy/i, "#ff8ad8"], [/incol|color/i, "#d6d6e0"], [/allen|trainer/i, "#35d0c0"], [/energ/i, "#f0e68c"]];
+const typeColor = t => { for (const [rx, c] of TYPE_COL) if (rx.test(t || "")) return c; return "#8d97ff"; };
+
+const UI = { view: "grid", sort: "recent", group: false, collapsed: new Set() };
+try { Object.assign(UI, JSON.parse(localStorage.getItem("pc_ui") || "{}")); } catch (e) { }
+UI.collapsed = new Set();
+const saveUI = () => { try { localStorage.setItem("pc_ui", JSON.stringify({ view: UI.view, sort: UI.sort, group: UI.group })); } catch (e) { } };
+
+const natCmp = (a, b) => String(a ?? "").localeCompare(String(b ?? ""), "it", { numeric: true, sensitivity: "base" });
+const priceCmp = dir => (a, b) => { const x = a.last_price_cents, y = b.last_price_cents; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return dir * (y - x); };
+const chgOf = r => r.rd ? r.rd.now - r.rd.prev : null;
+const chgCmp = dir => (a, b) => { const x = chgOf(a), y = chgOf(b); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return dir * (y - x); };
+const SORTS = {
+  recent: (a, b) => (a.added_at < b.added_at ? 1 : -1),
+  valueDesc: priceCmp(1), valueAsc: priceCmp(-1),
+  name: (a, b) => natCmp(a.name, b.name),
+  number: (a, b) => natCmp(a.collector_number, b.collector_number),
+  chgUp: chgCmp(1), chgDown: chgCmp(-1),
+};
+let rows = [], lastRefreshInfo = null;
 
 async function renderCollection() {
-  const col = await DB.getAll("collection"); const list = [];
+  const col = await DB.getAll("collection"), list = [];
+  lastRefreshInfo = await DB.meta("last_refresh", null);
   for (const c of col) {
     const f = await cardFull(c.blueprint_id); if (!f) continue;
-    const hist = (await DB.byIndex("history", "blueprint_id", c.blueprint_id)).filter(h => h.price_cents != null).sort((a, b) => a.checked_at < b.checked_at ? -1 : 1);
-    f.delta = hist.length && f.last_price_cents ? (f.last_price_cents - hist[0].price_cents) / hist[0].price_cents : null;
+    const rc = lastRefreshInfo && lastRefreshInfo.cards && lastRefreshInfo.cards[f.blueprint_id];
+    f.rd = rc ? { prev: rc[0], now: rc[1], cur: f.last_price_currency } : null;
     list.push(f);
   }
   rows = list;
-  const total = rows.reduce((a, r) => a + (r.last_price_cents || 0) * r.owned_qty, 0);
-  $("#total").textContent = eur(total, Settings.get().currency);
-  $("#totalInfo").textContent = `${rows.length} carte diverse · ${rows.reduce((a, r) => a + r.owned_qty, 0)} totali · prezzi aggiornati: ${when(await DB.meta("prices_updated_at"))}`;
-  $("#collNote").textContent = "I valori cambiano solo quando premi «Aggiorna valore collezione»: ogni aggiornamento aggiunge un punto allo storico di ogni carta.";
-  drawTable();
+  await drawHero();
+  drawItems();
 }
-function drawTable() {
+
+function spark(series) {
+  if (!series || series.length < 2) return "";
+  const W = 260, H = 54, xs = series.map(s => +new Date(s.at)), ys = series.map(s => s.cents);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys), pad = (y1 - y0) || 1;
+  const X = v => 4 + (W - 8) * (x1 === x0 ? .5 : (v - x0) / (x1 - x0)), Y = v => H - 6 - (H - 14) * ((v - y0) / pad);
+  const pts = series.map((s, i) => `${X(xs[i]).toFixed(1)},${Y(ys[i]).toFixed(1)}`);
+  const up = ys[ys.length - 1] >= ys[0];
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Andamento del valore della raccolta"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${up ? "#3be3a5" : "#ff5a76"}" stop-opacity=".35"/><stop offset="1" stop-color="${up ? "#3be3a5" : "#ff5a76"}" stop-opacity="0"/></linearGradient></defs>
+    <path d="M${pts.join(" L")} L${X(x1).toFixed(1)},${H} L${X(x0).toFixed(1)},${H} Z" fill="url(#sg)"/><path d="M${pts.join(" L")}" fill="none" stroke="${up ? "#3be3a5" : "#ff5a76"}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${X(xs[xs.length - 1])}" cy="${Y(ys[ys.length - 1])}" r="3.6" fill="${up ? "#3be3a5" : "#ff5a76"}"/></svg>`;
+}
+const placeholder = r => `<div class="ph" style="--t:${typeColor(r.card_type)}"><span>${esc(r.name)}</span></div>`;
+const artHtml = r => r.image_url ? `<img src="${esc(r.image_url)}" alt="${esc(r.name)}" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',innerHTML:'<span>${esc(r.name).replace(/'/g, "")}</span>'}))">` : placeholder(r);
+
+async function drawHero() {
+  const cur = Settings.get().currency;
+  const total = rows.reduce((a, r) => a + (r.last_price_cents || 0) * r.owned_qty, 0);
+  const qtyTot = rows.reduce((a, r) => a + r.owned_qty, 0);
+  const updated = await DB.meta("prices_updated_at"), series = (await DB.meta("totals", [])) || [];
+  const lr = lastRefreshInfo;
+  const top3 = [...rows].filter(r => r.last_price_cents != null).sort((a, b) => b.last_price_cents - a.last_price_cents).slice(0, 3);
+  const fan = top3.length ? `<div class="fan" aria-label="Le carte più preziose">${top3.map((r, i) => `<div class="fc fc${i}" style="--t:${typeColor(r.card_type)}">${artHtml(r)}<div class="foil"></div><span class="fp">${eur(r.last_price_cents, r.last_price_currency)}</span></div>`).join("")}</div>` : "";
+  $("#collHero").innerHTML = `<div class="hv">
+      <div class="hl">Valore della raccolta</div>
+      <div class="big" id="total">${eur(total, cur)}</div>
+      <div class="hrow">${lr ? deltaHtml({ prev: lr.prevTotal, now: lr.newTotal, cur }, { big: true }) + `<span class="note">dall'ultimo aggiornamento · ${esc(when(lr.at))}</span>` : `<span class="note">${rows.length ? "Premi «Aggiorna valore» per vedere come cambia il valore" : ""}</span>`}</div>
+      <div class="hsub" id="totalInfo">${rows.length} carte diverse · ${qtyTot} totali · prezzi aggiornati: ${esc(when(updated))}</div>
+      ${spark(series)}
+    </div>${fan}`;
+}
+
+function filtered() {
   const f = cleanName($("#filter").value);
   const l = rows.filter(r => !f || cleanName([r.name, r.expansion_name, r.card_type, r.collector_number].join(" ")).includes(f));
-  l.sort((a, b) => { const x = a[sortKey], y = b[sortKey]; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * sortDir; });
-  if (!l.length) { $("#tableWrap").innerHTML = `<div class="empty">${rows.length ? "Nessun risultato." : "Nessuna carta ancora: scansionane una!"}</div>`; return; }
-  $("#tableWrap").innerHTML = `<table><thead><tr>${COLS.map(([k, t, n, h]) => `<th class="${n ? "num" : ""} ${h ? "hide-s" : ""}" data-k="${k}">${t}${k === sortKey ? (sortDir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${
-    l.map(r => `<tr data-id="${r.blueprint_id}"><td>${r.image_url ? `<img src="${esc(r.image_url)}" loading="lazy" alt="">` : ""}</td>
-      <td><b>${esc(r.name)}</b></td><td class="hide-s">${esc(r.expansion_name)}</td><td>${esc(r.collector_number)}</td><td class="hide-s">${esc(r.card_type)}</td>
-      <td class="num hide-s">${r.hp ?? "—"}</td><td class="num">${r.owned_qty}</td><td class="num"><b>${eur(r.last_price_cents, r.last_price_currency)}</b></td>
-      <td class="num ${r.delta > 0 ? "up" : r.delta < 0 ? "down" : ""}">${r.delta == null ? "—" : (r.delta > 0 ? "+" : "") + (r.delta * 100).toFixed(1) + "%"}</td>
-      <td class="hide-s">${when(r.added_at)}</td></tr>`).join("")}</tbody></table>`;
-  $$("#tableWrap th").forEach(th => th.onclick = () => { const k = th.dataset.k; if (!k || k === "image_url") return; sortDir = k === sortKey ? -sortDir : 1; sortKey = k; drawTable(); });
-  $$("#tableWrap tbody tr").forEach(tr => tr.onclick = () => openCard(+tr.dataset.id));
+  l.sort(SORTS[UI.sort] || SORTS.recent);
+  return l;
 }
-$("#filter").oninput = drawTable;
+function tileHtml(r) {
+  return `<article class="tile" data-id="${r.blueprint_id}" tabindex="0" style="--t:${typeColor(r.card_type)}">
+    <div class="art">${artHtml(r)}<div class="foil"></div>${r.owned_qty > 1 ? `<span class="qty">×${r.owned_qty}</span>` : ""}${r.rd ? `<span class="chip">${deltaHtml(r.rd, { pct: false })}</span>` : ""}</div>
+    <div class="meta"><b class="nm">${esc(r.name)}</b><span class="st">${UI.group ? "" : esc(r.expansion_name) + " · "}#${esc(r.collector_number)}</span><strong class="pr">${eur(r.last_price_cents, r.last_price_currency)}</strong></div></article>`;
+}
+function listHtml(l) {
+  return `<div class="tw"><table><thead><tr><th></th><th>Nome</th><th class="hide-s">Collezione</th><th>N°</th><th class="hide-s">Tipo</th><th class="num hide-s">PS</th><th class="num">Q.tà</th><th class="num">Valore</th><th class="num">Ultimo aggiornamento</th></tr></thead><tbody>${
+    l.map(r => `<tr data-id="${r.blueprint_id}" tabindex="0"><td class="th">${r.image_url ? `<img src="${esc(r.image_url)}" loading="lazy" alt="">` : ""}</td><td><b>${esc(r.name)}</b></td><td class="hide-s">${esc(r.expansion_name)}</td><td>${esc(r.collector_number)}</td>
+      <td class="hide-s"><span class="dot" style="background:${typeColor(r.card_type)}"></span>${esc(r.card_type)}</td><td class="num hide-s">${r.hp ?? "—"}</td><td class="num">${r.owned_qty}</td>
+      <td class="num"><b>${eur(r.last_price_cents, r.last_price_currency)}</b></td><td class="num">${deltaHtml(r.rd) || '<span class="note">—</span>'}</td></tr>`).join("")}</tbody></table></div>`;
+}
+const itemsHtml = l => UI.view === "grid" ? `<div class="tiles">${l.map(tileHtml).join("")}</div>` : listHtml(l);
+
+function drawItems() {
+  const l = filtered(), wrap = $("#tableWrap");
+  $("#sort").value = UI.sort; $("#group").checked = UI.group;
+  $("#viewGrid").classList.toggle("on", UI.view === "grid"); $("#viewList").classList.toggle("on", UI.view === "list");
+  if (!l.length) {
+    wrap.innerHTML = rows.length ? '<div class="empty"><b>Nessun risultato</b>Prova con un altro nome o collezione.</div>'
+      : '<div class="empty"><div class="ball big"></div><b>La tua raccolta è vuota</b>Scansiona la prima carta: compare qui con il suo valore.<button class="btn" id="goScan">Scansiona una carta</button></div>';
+    const g = $("#goScan"); if (g) g.onclick = () => showTab("scan");
+    return;
+  }
+  if (!UI.group) wrap.innerHTML = itemsHtml(l);
+  else {
+    const groups = new Map();
+    for (const r of l) { if (!groups.has(r.expansion_id)) groups.set(r.expansion_id, { name: r.expansion_name || "Senza collezione", items: [], total: 0 }); const g = groups.get(r.expansion_id); g.items.push(r); g.total += (r.last_price_cents || 0) * r.owned_qty; }
+    const byValue = UI.sort === "valueDesc" || UI.sort === "valueAsc";
+    const order = [...groups.entries()].sort((a, b) => byValue ? (UI.sort === "valueDesc" ? 1 : -1) * (b[1].total - a[1].total) : natCmp(a[1].name, b[1].name));
+    wrap.innerHTML = order.map(([id, g]) => `<section class="grp"><header class="ghead" data-g="${id}" tabindex="0" aria-expanded="${!UI.collapsed.has(id)}"><h3>${esc(g.name)}</h3><span class="gs"><b>${g.items.length}</b> ${g.items.length === 1 ? "carta" : "carte"} · <b>${eur(g.total, Settings.get().currency)}</b></span><i class="chev${UI.collapsed.has(id) ? " shut" : ""}"></i></header>${UI.collapsed.has(id) ? "" : itemsHtml(g.items)}</section>`).join("");
+    $$("#tableWrap .ghead").forEach(h => { const tg = () => { const id = +h.dataset.g; UI.collapsed.has(id) ? UI.collapsed.delete(id) : UI.collapsed.add(id); drawItems(); }; h.onclick = tg; h.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tg(); } }; });
+  }
+  $$("#tableWrap [data-id]").forEach(el => { const go = () => openCard(+el.dataset.id); el.onclick = go; el.onkeydown = e => { if (e.key === "Enter") go(); }; });
+}
+$("#filter").oninput = drawItems;
+$("#sort").onchange = e => { UI.sort = e.target.value; saveUI(); drawItems(); };
+$("#group").onchange = e => { UI.group = e.target.checked; saveUI(); drawItems(); };
+$("#viewGrid").onclick = () => { UI.view = "grid"; saveUI(); drawItems(); };
+$("#viewList").onclick = () => { UI.view = "list"; saveUI(); drawItems(); };
 $("#btnRefresh").onclick = refreshAll;
 
+/* ---- dettaglio carta con grafico dello storico */
 function chart(hist) {
   const pts = hist.filter(h => h.price_cents != null);
-  if (pts.length < 2) return '<div class="note">Servono almeno due controlli per vedere il grafico.</div>';
-  const W = 680, H = 190, P = 40, xs = pts.map(p => +new Date(p.checked_at)), ys = pts.map(p => p.price_cents / 100);
+  if (pts.length < 2) return '<div class="note chartnote">Servono almeno due controlli per vedere il grafico: premi «Aggiorna valore» nella raccolta.</div>';
+  const W = 700, H = 210, P = 44, xs = pts.map(p => +new Date(p.checked_at)), ys = pts.map(p => p.price_cents / 100);
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys), pad = (y1 - y0) || 1;
-  const X = v => P + (W - 2 * P) * (x1 === x0 ? .5 : (v - x0) / (x1 - x0)), Y = v => H - P - (H - 2 * P) * ((v - (y0 - pad * .1)) / (pad * 1.2));
-  const path = pts.map((p, i) => `${i ? "L" : "M"}${X(xs[i]).toFixed(1)},${Y(ys[i]).toFixed(1)}`).join(" ");
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%"><path d="${path}" fill="none" stroke="#ffcb05" stroke-width="2.5"/>
-    ${pts.map((p, i) => `<circle cx="${X(xs[i])}" cy="${Y(ys[i])}" r="4" fill="#ffcb05"><title>${eur(p.price_cents, p.currency)} · ${when(p.checked_at)}</title></circle>`).join("")}
-    <text x="4" y="${Y(y1) + 4}">${y1.toFixed(2)}€</text><text x="4" y="${Y(y0) + 4}">${y0.toFixed(2)}€</text>
-    <text x="${P}" y="${H - 8}">${new Date(x0).toLocaleDateString("it-IT")}</text><text x="${W - P}" y="${H - 8}" text-anchor="end">${new Date(x1).toLocaleDateString("it-IT")}</text></svg>`;
+  const X = v => P + (W - 2 * P - 10) * (x1 === x0 ? .5 : (v - x0) / (x1 - x0)), Y = v => H - 34 - (H - 56) * ((v - (y0 - pad * .15)) / (pad * 1.3));
+  const up = ys[ys.length - 1] >= ys[0], col = up ? "#3be3a5" : "#ff5a76", pth = pts.map((p, i) => `${X(xs[i]).toFixed(1)},${Y(ys[i]).toFixed(1)}`);
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Storico del valore"><defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".32"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>
+    <line x1="${P}" x2="${W - 8}" y1="${Y(y1)}" y2="${Y(y1)}" class="gl"/><line x1="${P}" x2="${W - 8}" y1="${Y(y0)}" y2="${Y(y0)}" class="gl"/>
+    <path d="M${pth.join(" L")} L${X(x1)},${H - 34} L${X(x0)},${H - 34} Z" fill="url(#cg)"/><path d="M${pth.join(" L")}" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    ${pts.map((p, i) => `<circle cx="${X(xs[i])}" cy="${Y(ys[i])}" r="4.5" fill="#10143a" stroke="${col}" stroke-width="2.5"><title>${eur(p.price_cents, p.currency)} · ${when(p.checked_at)}</title></circle>`).join("")}
+    <text x="4" y="${Y(y1) + 4}">${y1.toFixed(2)} €</text><text x="4" y="${Y(y0) + 4}">${y0.toFixed(2)} €</text>
+    <text x="${P}" y="${H - 10}">${new Date(x0).toLocaleDateString("it-IT")}</text><text x="${W - 8}" y="${H - 10}" text-anchor="end">${new Date(x1).toLocaleDateString("it-IT")}</text></svg>`;
 }
 async function openCard(id) {
-  const c = await cardFull(id);
+  const c = await cardFull(id); if (!c) return;
   const hist = (await DB.byIndex("history", "blueprint_id", id)).sort((a, b) => a.checked_at < b.checked_at ? -1 : 1);
-  $("#dlgBody").innerHTML = `<div class="hero">${c.image_url ? `<img src="${esc(c.image_url)}" alt="">` : ""}<div style="flex:1"><div class="name">${esc(c.name)}</div><div class="coll">${esc(c.expansion_name)}</div>
-    <div class="kv"><span>Numero</span><span>${esc(c.collector_number)}</span><span>Tipo</span><span>${esc(c.card_type)}</span><span>PS</span><span>${c.hp ?? "—"}</span><span>Rarità</span><span>${esc(c.rarity)}</span>
-    <span>Quantità</span><span>${c.owned_qty ?? 0}</span><span>Valore attuale</span><span><b>${eur(c.last_price_cents, c.last_price_currency)}</b></span></div></div></div>
-    <h3 style="margin:14px 0 4px">Storico del valore</h3>${chart(hist)}
-    <div class="hist">${[...hist].reverse().map(h => `<div><span>${when(h.checked_at)}</span><span>${eur(h.price_cents, h.currency)} · ${h.offers ?? 0} offerte</span></div>`).join("")}</div>
-    <div style="margin-top:16px;display:flex;gap:8px;justify-content:space-between"><button class="btn bad" id="rm">Rimuovi dalla raccolta</button><button class="btn sec" id="cl">Chiudi</button></div>`;
+  const priced = hist.filter(h => h.price_cents != null);
+  const since = priced.length > 1 ? { prev: priced[0].price_cents, now: c.last_price_cents ?? priced[priced.length - 1].price_cents, cur: c.last_price_currency } : null;
+  const rc = lastRefreshInfo && lastRefreshInfo.cards && lastRefreshInfo.cards[id];
+  const lastRef = rc ? { prev: rc[0], now: rc[1], cur: c.last_price_currency } : null;
+  let prevP = null;
+  const histRows = hist.map(h => { const d = (prevP != null && h.price_cents != null) ? { prev: prevP, now: h.price_cents, cur: h.currency } : null; if (h.price_cents != null) prevP = h.price_cents; return `<div class="hr"><span>${esc(when(h.checked_at))}</span><span>${eur(h.price_cents, h.currency)} <small class="note">· ${h.offers ?? 0} offerte</small></span><span class="hd">${deltaHtml(d, { pct: false })}</span></div>`; }).reverse().join("");
+  $("#dlgBody").innerHTML = `<div class="dhero" style="--t:${typeColor(c.card_type)}"><div class="dart">${artHtml(c)}<div class="foil"></div></div>
+    <div class="dinfo"><h2>${esc(c.name)}</h2><div class="coll">${esc(c.expansion_name)}</div>
+      <div class="badges"><span class="b t">${esc(c.card_type || "Tipo n/d")}</span><span class="b">PS ${c.hp ?? "—"}</span><span class="b">${esc(c.rarity || "Rarità n/d")}</span><span class="b">#${esc(c.collector_number)}</span></div>
+      <div class="dval"><span class="note">Valore attuale</span><strong>${eur(c.last_price_cents, c.last_price_currency)}</strong>${c.owned_qty > 1 ? `<span class="note">× ${c.owned_qty} = ${eur((c.last_price_cents || 0) * c.owned_qty, c.last_price_currency)}</span>` : ""}</div>
+      <div class="dchg"><div><span class="note">Ultimo aggiornamento</span>${deltaHtml(lastRef) || '<span class="note">—</span>'}</div><div><span class="note">Dall'inizio</span>${deltaHtml(since) || '<span class="note">—</span>'}</div></div>
+    </div></div>
+    <h3 class="dh">Storico del valore</h3>${chart(hist)}
+    <div class="hist">${histRows || '<div class="note">Nessun controllo ancora.</div>'}</div>
+    <div class="dfoot"><button class="btn bad" id="rm">Rimuovi dalla raccolta</button><button class="btn sec" id="cl">Chiudi</button></div>`;
   $("#dlg").showModal();
   $("#cl").onclick = () => $("#dlg").close();
   $("#rm").onclick = async () => { if (confirm("Rimuovere questa carta dalla raccolta? Lo storico prezzi resta salvato.")) { await setOwned(id, false); $("#dlg").close(); renderCollection(); } };
 }
+$("#dlg").addEventListener("click", e => { if (e.target === $("#dlg")) $("#dlg").close(); });
 
 /* ---------------------------------------------------------- impostazioni */
 async function renderSettings() {
@@ -791,6 +947,6 @@ $("#bFile").onchange = async e => {
   await loadCache();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { });
   if (!Settings.get().token) showTab("set"); else showTab("scan");
-  window.App = { DB, Settings, identify, searchCards, scanImage, parseNumber, syncCatalog, setOwned, recordPrice, refreshAll, loadCache, cardFull, ctGet, bestPrice, parseBlueprint, normKey, selectCard };
+  window.App = { DB, Settings, identify, searchCards, scanImage, parseNumber, nameCandidates, deltaHtml, UI, syncCatalog, setOwned, recordPrice, refreshAll, loadCache, cardFull, ctGet, bestPrice, parseBlueprint, normKey, selectCard };
   window.dispatchEvent(new Event("app-ready"));
 })();
